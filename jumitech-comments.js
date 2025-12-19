@@ -20,7 +20,7 @@
   }
   const db = firebase.firestore();
 
-  // DOM elements
+  function initJumiComments() {
   const form = document.getElementById("jumi-comment-form");
   const nameInput = document.getElementById("jumi-name");
   const emailInput = document.getElementById("jumi-email");
@@ -34,10 +34,26 @@
   const closeModalBtn = document.getElementById("jumi-modal-close");
   const modalBackdrop = document.getElementById("jumi-modal-backdrop");
 
+  // If comment container does not exist, abort safely
   if (!form || !listEl) {
-    console.warn("Jumitech comments: Comment container not found.");
+    return false;
+  }
+
+  // 👉 MOVE ALL YOUR EXISTING COMMENT LOGIC BELOW THIS LINE
+  // (Firebase refs, loadComments(), event listeners, etc.)
+  // DO NOT change that logic — just keep it inside this function
+
+  return true;
+}
+
+// Wait until Blogger finishes rendering post HTML
+(function waitForComments() {
+  if (initJumiComments()) {
+    console.log("Jumitech comments initialized");
     return;
   }
+  setTimeout(waitForComments, 150);
+})();
 
   // Get unique Post ID (canonical URL without query/hash)
   function getPostId() {
