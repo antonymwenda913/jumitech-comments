@@ -351,7 +351,82 @@
 
       return item;
     }
+    // ===============================
+// INLINE REPLY UI (STEP 1 ONLY)
+// ===============================
 
+// Close all open reply forms
+function closeAllReplyForms() {
+  document.querySelectorAll(".jumi-reply-form").forEach(function (f) {
+    f.style.display = "none";
+  });
+}
+
+// Enhance a rendered comment with Reply UI
+function attachReplyUI(commentEl) {
+  if (!commentEl) return;
+
+  // Prevent duplicate attachment
+  if (commentEl.querySelector(".jumi-reply-btn")) return;
+
+  // Reply button
+  const replyBtn = document.createElement("button");
+  replyBtn.className = "jumi-reply-btn";
+  replyBtn.type = "button";
+  replyBtn.textContent = "Reply";
+
+  // Replies container (empty for now)
+  const repliesWrap = document.createElement("div");
+  repliesWrap.className = "jumi-replies";
+
+  // Inline reply form
+  const form = document.createElement("div");
+  form.className = "jumi-reply-form";
+
+  const textarea = document.createElement("textarea");
+  textarea.placeholder = "Write a reply…";
+
+  const actions = document.createElement("div");
+  actions.className = "jumi-reply-actions";
+
+  const submitBtn = document.createElement("button");
+  submitBtn.className = "jumi-reply-submit";
+  submitBtn.textContent = "Post reply";
+  submitBtn.type = "button";
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.className = "jumi-reply-cancel";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.type = "button";
+
+  actions.appendChild(submitBtn);
+  actions.appendChild(cancelBtn);
+
+  form.appendChild(textarea);
+  form.appendChild(actions);
+
+  // Button behavior
+  replyBtn.addEventListener("click", function () {
+    closeAllReplyForms();
+    form.style.display = "block";
+    textarea.focus();
+  });
+
+  cancelBtn.addEventListener("click", function () {
+    form.style.display = "none";
+    textarea.value = "";
+  });
+
+  // TEMP: no submit logic yet
+  submitBtn.addEventListener("click", function () {
+    alert("Reply posting will be enabled in Step 2.");
+  });
+
+  // Attach to comment
+  commentEl.appendChild(replyBtn);
+  commentEl.appendChild(form);
+  commentEl.appendChild(repliesWrap);
+}  
     function loadComments() {
       commentsRef
         .where("postId", "==", postId)
@@ -371,7 +446,10 @@
             let count = 0;
             snap.forEach(function (doc) {
               count++;
-              listEl.appendChild(renderComment(doc.data()));
+              const el = renderComment(doc.data());
+attachReplyUI(el);
+listEl.appendChild(el);
+
             });
 
             countEl.textContent = count + (count === 1 ? " comment" : " comments");
