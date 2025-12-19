@@ -299,4 +299,40 @@
     if (initJumiComments()) return;
     setTimeout(waitForComments, 150);
   })();
+  // ===== TEMP ADMIN AUTH (REMOVE AFTER UID IS COPIED) =====
+(function adminAuthTemp() {
+  if (!firebase.auth) return;
+
+  const auth = firebase.auth();
+  const loginBtn = document.getElementById("jumi-admin-login");
+  const logoutBtn = document.getElementById("jumi-admin-logout");
+
+  if (!loginBtn || !logoutBtn) return;
+
+  loginBtn.addEventListener("click", function () {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    auth.signInWithPopup(provider).catch(function (err) {
+      alert("Login failed: " + err.message);
+    });
+  });
+
+  logoutBtn.addEventListener("click", function () {
+    auth.signOut();
+  });
+
+  auth.onAuthStateChanged(function (user) {
+    if (user) {
+      console.log("ADMIN SIGNED IN");
+      console.log("UID:", user.uid);
+      console.log("EMAIL:", user.email);
+
+      loginBtn.style.display = "none";
+      logoutBtn.style.display = "inline-block";
+    } else {
+      loginBtn.style.display = "inline-block";
+      logoutBtn.style.display = "none";
+    }
+  });
+})();
+
 })();
