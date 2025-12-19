@@ -1,14 +1,15 @@
 (function () {
-  // Avoid running multiple times
+  // Prevent double execution
   if (window.jumiCommentsLoaded) return;
   window.jumiCommentsLoaded = true;
 
-  function waitForCommentsHTML() {
+  // Wait until Blogger has rendered the comment HTML
+  function waitForDOM() {
     const form = document.getElementById("jumi-comment-form");
     const listEl = document.getElementById("jumi-comments-list");
 
     if (!form || !listEl) {
-      setTimeout(waitForCommentsHTML, 150);
+      setTimeout(waitForDOM, 150);
       return;
     }
 
@@ -16,7 +17,7 @@
   }
 
   function initComments() {
-    // ✅ Firebase config
+    // Firebase config (UNCHANGED)
     const firebaseConfig = {
       apiKey: "AIzaSyDS0hkaHQd0NhvGOIEHu-saapF0VulJkXo",
       authDomain: "jumitech-comments.firebaseapp.com",
@@ -33,7 +34,7 @@
     }
     const db = firebase.firestore();
 
-    // DOM elements (UNCHANGED)
+    // DOM elements (same as your working version)
     const form = document.getElementById("jumi-comment-form");
     const nameInput = document.getElementById("jumi-name");
     const emailInput = document.getElementById("jumi-email");
@@ -164,10 +165,12 @@
       messageEl.textContent = "";
     }
 
+    // Modal events
     openModalBtn && openModalBtn.addEventListener("click", openModal);
     closeModalBtn && closeModalBtn.addEventListener("click", closeModal);
     modalBackdrop && modalBackdrop.addEventListener("click", closeModal);
 
+    // Submit comment
     form.addEventListener("submit", function (e) {
       e.preventDefault();
 
@@ -202,5 +205,5 @@
     loadComments();
   }
 
-  waitForCommentsHTML();
+  waitForDOM();
 })();
