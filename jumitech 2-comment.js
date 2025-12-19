@@ -75,6 +75,21 @@
       f.style.display = "none";
     });
   }
+  // ===============================
+// REPLY IDENTITY HELPERS
+// ===============================
+function getSessionName() {
+  return sessionStorage.getItem("jumi_reply_name") || "";
+}
+
+function getSessionEmail() {
+  return sessionStorage.getItem("jumi_reply_email") || "";
+}
+
+function setSessionIdentity(name, email) {
+  if (name) sessionStorage.setItem("jumi_reply_name", name);
+  if (email) sessionStorage.setItem("jumi_reply_email", email);
+}
 
   /* ===============================
      REPLY UI + SAVE
@@ -126,36 +141,86 @@
     };
 
     submitBtn.onclick = async () => {
-      const replyText = safeTrim(textarea.value);
-      if (!replyText) return;
+  const replyText = safeTrim(textarea.value);
+  if (!replyText) return;
 
-      const user = auth?.currentUser || null;
-      const isAdmin = user && user.uid === ADMIN_UID;
+  const user = auth?.currentUser || null;
+  const isAdmin = user && user.uid === ADMIN_UID;
 
-      submitBtn.disabled = true;
+  let name = "";
+  let email = "";
 
-      try {
-        await db.collection("jumitech_comments").add({
-          postId: getPostId(),
-          parentId: parentId,
-          isReply: true,
-          comment: replyText,
-          name: isAdmin ? "Jumitech" : "Guest",
-          isAdmin: isAdmin === true,
-          adminUid: isAdmin ? user.uid : null,
-          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-          isApproved: true,
-        });
+  if (isAdmin) {
+    name = "Jumitech";
+  } else {
+    // Try main form first
+    const mainName = safeTrim(document.getElementById("jumi-name")?.value);
+    const mainEmail = safeTrim(document.getElementById("jumi-email")?.value);
 
-        textarea.value = "";
-        form.style.display = "none";
-      } catch (e) {
-        alert("Failed to post reply. Try again.");
-        console.error(e);
-      } finally {
-        submitBtn.disabled = false;
+    name = mainName || getSessionName();
+    email = mainEmail || getSessionEmail();
+
+    // If still no name → prompt inline
+    if (!name) {
+      // Inject identity fields once
+      if (!form.querySelector(".jumi-reply-name")) {
+        const nameInput = document.createElement("input");
+        nameInput.className = "jumi-reply-name";
+        nameInput.placeholder = "Your name (required)";
+        nameInput.style.marginTop = "6px";
+
+        const emailInput = document.createElement("input");
+        emailInput.className = "jumi-reply-email";
+        emailInput.placeholder = "Email (optional)";
+        emailInput.type = "email";
+        emailInput.style.marginTop = "6px";
+
+        form.insertBefore(emailInput, textarea);
+        form.insertBefore(nameInput, emailInput);
+
+        alert("Please enter your name to post a reply.");
+        return;
       }
-    };
+
+      // Read injected fields
+      name = safeTrim(form.querySelector(".jumi-reply-name")?.value);
+      email = safeTrim(form.querySelector(".jumi-reply-email")?.value);
+
+      if (!name) {
+        alert("Name is required.");
+        return;
+      }
+    }
+  }
+
+  submitBtn.disabled = true;
+
+  try {
+    await db.collection("jumitech_comments").add({
+      postId: getPostId(),
+      parentId: parentId,
+      isReply: true,
+      comment: replyText,
+      name: name,
+      email: email || null,
+      isAdmin: isAdmin === true,
+      adminUid: isAdmin ? user.uid : null,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      isApproved: true,
+    });
+
+    // Cache identity for session
+    if (!isAdmin) setSessionIdentity(name, email);
+
+    textarea.value = "";
+    form.style.display = "none";
+  } catch (e) {
+    alert("Failed to post reply. Try again.");
+    console.error(e);
+  } finally {
+    submitBtn.disabled = false;
+  }
+};
 
     commentEl.appendChild(replyBtn);
     commentEl.appendChild(form);
