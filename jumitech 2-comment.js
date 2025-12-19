@@ -3,7 +3,11 @@
   if (window.jumiCommentsLoaded) return;
   window.jumiCommentsLoaded = true;
 
-  // ✅ Firebase config
+  // ====== CONFIG ======
+  const ADMIN_UID = "CSa8pXYawsSLKwQQKWTBypj1YD42"; // <-- your admin UID
+  const RESERVED_NAME = "jumitech"; // case-insensitive
+  const THROTTLE_MS = 45000; // 45s basic client throttle
+
   const firebaseConfig = {
     apiKey: "AIzaSyDS0hkaHQd0NhvGOIEHu-saapF0VulJkXo",
     authDomain: "jumitech-comments.firebaseapp.com",
@@ -14,30 +18,31 @@
     measurementId: "G-87B358GKT1"
   };
 
-  // Initialize Firebase (compat)
+  // Firebase SDK presence checks
   if (!window.firebase || !firebase.apps) {
-    console.error("Firebase SDK not found. Ensure firebase-app-compat + firestore-compat are loaded.");
+    console.error(
+      "Firebase SDK not found. Ensure firebase-app-compat + firestore-compat + auth-compat are loaded."
+    );
     return;
   }
+
+  // Initialize Firebase
   if (firebase.apps.length === 0) firebase.initializeApp(firebaseConfig);
   const db = firebase.firestore();
+  const auth = firebase.auth ? firebase.auth() : null;
 
-  // --- Helpers ---
-  function getPostId() {
-    const canon = document.querySelector('link[rel="canonical"]');
-    const url = (canon ? canon.href : window.location.href)
-      .split("#")[0]
-      .split("?")[0];
-    return url;
-  }
-
+  // Helpers
   function safeTrim(v) {
     return (v || "").toString().trim();
   }
 
-  function isAdminName(name) {
-    // Your rule: "Jumitech" is Admin (case-insensitive, trimmed)
-    return safeTrim(name).toLowerCase() === "jumitech";
+  function isReservedName(name) {
+    return safeTrim(name).toLowerCase() === RESERVED_NAME;
+  }
+
+  function getPostId() {
+    const canon = document.querySelector('link[rel="canonical"]');
+    return (canon ? canon.href : window.location.href).split("#")[0].split("?")[0];
   }
 
   function getInitials(name) {
@@ -60,7 +65,9 @@
 
   function getAvatarGradient(name) {
     const h = hashString(name || "guest") % 360;
-    const s = 70, l1 = 55, l2 = 45;
+    const s = 70,
+      l1 = 55,
+      l2 = 45;
     return (
       "linear-gradient(135deg, hsl(" +
       h +
@@ -88,9 +95,64 @@
     }
   }
 
-  // --- Init guarded (Blogger timing-safe) ---
+  // Throttle
+  const throttleKey = "jumi_last_comment_ts";
+  function canPostNow() {
+    const last = parseInt(localStorage.getItem(throttleKey) || "0", 10);
+    return Date.now() - last >= THROTTLE_MS;
+  }
+  function markPosted() {
+    localStorage.setItem(throttleKey, String(Date.now()));
+  }
+
+  // Create a Verify UI (only when needed)
+  function ensureVerifyUI(modalEl) {
+    if (!modalEl) return null;
+
+    let wrap = document.getElementById("jumi-verify-wrap");
+    if (wrap) return wrap;
+
+    wrap = document.createElement("div");
+    wrap.id = "jumi-verify-wrap";
+    wrap.style.marginTop = "10px";
+    wrap.style.display = "none";
+
+    const msg = document.createElement("div");
+    msg.id = "jumi-verify-msg";
+    msg.style.fontSize = "0.9rem";
+    msg.style.color = "#333";
+    msg.style.marginBottom = "8px";
+    msg.textContent =
+      "The name “Jumitech” is reserved. Verify identity to use this name.";
+
+    const btn = document.createElement("button");
+    btn.id = "jumi-verify-btn";
+    btn.type = "button";
+    btn.style.padding = "8px 14px";
+    btn.style.borderRadius = "999px";
+    btn.style.border = "1px solid #007bff";
+    btn.style.background = "#007bff";
+    btn.style.color = "#fff";
+    btn.style.fontWeight = "700";
+    btn.style.cursor = "pointer";
+    btn.textContent = "Verify identity (Google)";
+
+    wrap.appendChild(msg);
+    wrap.appendChild(btn);
+
+    // Append inside modal, below the form message if possible
+    const msgEl = document.getElementById("jumi-form-message");
+    if (msgEl && msgEl.parentNode) {
+      msgEl.parentNode.appendChild(wrap);
+    } else {
+      modalEl.appendChild(wrap);
+    }
+
+    return wrap;
+  }
+
+  // Main init (timing-safe for Blogger)
   function initJumiComments() {
-    // Required DOM
     const form = document.getElementById("jumi-comment-form");
     const nameInput = document.getElementById("jumi-name");
     const emailInput = document.getElementById("jumi-email");
@@ -100,18 +162,21 @@
     const countEl = document.getElementById("jumi-comments-count");
     const messageEl = document.getElementById("jumi-form-message");
 
-    // Modal DOM
     const modalEl = document.getElementById("jumi-comment-modal");
     const openModalBtn = document.getElementById("jumi-open-modal-btn");
     const closeModalBtn = document.getElementById("jumi-modal-close");
     const modalBackdrop = document.getElementById("jumi-modal-backdrop");
 
-    if (!form || !listEl || !countEl) return false; // not on this page yet
+    if (!form || !listEl || !countEl || !nameInput || !commentInput || !submitBtn) {
+      return false; // not ready or not on this page
+    }
 
     const postId = getPostId();
     const commentsRef = db.collection("jumitech_comments");
 
-    // --- UI helpers ---
+    let currentUser = null;
+    let isAdmin = false;
+
     function showMsg(text, type) {
       if (!messageEl) return;
       messageEl.textContent = text || "";
@@ -131,13 +196,109 @@
       modalEl.classList.remove("jumi-modal--open");
       modalEl.setAttribute("aria-hidden", "true");
       showMsg("", "");
+      const wrap = document.getElementById("jumi-verify-wrap");
+      if (wrap) wrap.style.display = "none";
     }
 
     if (openModalBtn) openModalBtn.addEventListener("click", openModal);
     if (closeModalBtn) closeModalBtn.addEventListener("click", closeModal);
     if (modalBackdrop) modalBackdrop.addEventListener("click", closeModal);
 
-    // --- Render comment ---
+    // Auth state (silent)
+    if (auth && auth.onAuthStateChanged) {
+      auth.onAuthStateChanged(function (user) {
+        currentUser = user || null;
+        isAdmin = !!(user && user.uid === ADMIN_UID);
+
+        // If admin, lock name to Jumitech
+        if (isAdmin) {
+          nameInput.value = "Jumitech";
+          nameInput.setAttribute("disabled", "disabled");
+          nameInput.setAttribute("readonly", "readonly");
+          showMsg("You are verified as Admin.", "success");
+        } else {
+          // If not admin, allow name edits unless they are trying to use reserved name
+          nameInput.removeAttribute("disabled");
+          nameInput.removeAttribute("readonly");
+          // do not overwrite their chosen name
+        }
+      });
+    }
+
+    // Verify identity flow (Option B: show button)
+    const verifyWrap = ensureVerifyUI(modalEl);
+    const verifyBtn = document.getElementById("jumi-verify-btn");
+
+    function showVerifyUI() {
+      if (!verifyWrap) return;
+      verifyWrap.style.display = "block";
+    }
+
+    function hideVerifyUI() {
+      if (!verifyWrap) return;
+      verifyWrap.style.display = "none";
+    }
+
+    function startGoogleVerify() {
+      if (!auth) {
+        showMsg("Auth not available. Ensure firebase-auth-compat is loaded.", "error");
+        return;
+      }
+      const provider = new firebase.auth.GoogleAuthProvider();
+      auth
+        .signInWithPopup(provider)
+        .then(function (res) {
+          const user = res && res.user ? res.user : null;
+          if (user && user.uid === ADMIN_UID) {
+            // Verified admin
+            isAdmin = true;
+            nameInput.value = "Jumitech";
+            nameInput.setAttribute("disabled", "disabled");
+            nameInput.setAttribute("readonly", "readonly");
+            hideVerifyUI();
+            showMsg("Verified. You can now post as Jumitech (Admin).", "success");
+          } else {
+            // Wrong account
+            isAdmin = false;
+            hideVerifyUI();
+            showMsg("This Google account is not authorized to use “Jumitech”.", "error");
+            // Force them off reserved name
+            if (isReservedName(nameInput.value)) nameInput.value = "";
+            nameInput.removeAttribute("disabled");
+            nameInput.removeAttribute("readonly");
+          }
+        })
+        .catch(function (err) {
+          showMsg("Verification failed: " + (err && err.message ? err.message : "Try again."), "error");
+        });
+    }
+
+    if (verifyBtn) verifyBtn.addEventListener("click", startGoogleVerify);
+
+    // If user types Jumitech, we require verification
+    nameInput.addEventListener("input", function () {
+      const n = safeTrim(nameInput.value);
+      if (!n) {
+        hideVerifyUI();
+        return;
+      }
+
+      if (isReservedName(n)) {
+        if (isAdmin) {
+          // already verified
+          hideVerifyUI();
+          showMsg("Posting as Admin.", "success");
+        } else {
+          // Not verified: do NOT allow posting yet
+          showVerifyUI();
+          showMsg("Reserved name detected. Verify identity to use “Jumitech”.", "error");
+        }
+      } else {
+        hideVerifyUI();
+      }
+    });
+
+    // Render
     function renderComment(data) {
       const item = document.createElement("div");
       item.className = "jumi-comment-item";
@@ -162,16 +323,13 @@
       const nameEl = document.createElement("span");
       nameEl.className = "jumi-comment-name";
       nameEl.textContent = data.name || "Guest";
+      left.appendChild(nameEl);
 
-      // Admin badge (based on name === "Jumitech")
-      if (isAdminName(data.name)) {
+      if (data.isAdmin === true) {
         const badge = document.createElement("span");
         badge.className = "jumi-admin-badge";
         badge.textContent = "Admin";
-        left.appendChild(nameEl);
         left.appendChild(badge);
-      } else {
-        left.appendChild(nameEl);
       }
 
       const dateEl = document.createElement("span");
@@ -194,7 +352,6 @@
       return item;
     }
 
-    // --- Load comments live ---
     function loadComments() {
       commentsRef
         .where("postId", "==", postId)
@@ -226,25 +383,13 @@
         );
     }
 
-    // --- Submit (simple anti-spam throttle) ---
-    // (Lightweight client throttle; real spam protection can be added server-side later.)
-    const THROTTLE_MS = 45000; // 45s
-    const throttleKey = "jumi_last_comment_ts";
-    function canPostNow() {
-      const last = parseInt(localStorage.getItem(throttleKey) || "0", 10);
-      const now = Date.now();
-      return now - last >= THROTTLE_MS;
-    }
-    function markPosted() {
-      localStorage.setItem(throttleKey, String(Date.now()));
-    }
-
+    // Submit
     form.addEventListener("submit", function (e) {
       e.preventDefault();
 
-      const name = safeTrim(nameInput && nameInput.value) || "Guest";
+      const nameRaw = safeTrim(nameInput.value) || "Guest";
       const email = safeTrim(emailInput && emailInput.value);
-      const comment = safeTrim(commentInput && commentInput.value);
+      const comment = safeTrim(commentInput.value);
 
       if (!comment) {
         showMsg("Please write a comment before posting.", "error");
@@ -256,37 +401,48 @@
         return;
       }
 
-      if (submitBtn) submitBtn.disabled = true;
+      // Enforce reserved name verification
+      if (isReservedName(nameRaw) && !isAdmin) {
+        showVerifyUI();
+        showMsg("To use “Jumitech”, please verify identity first.", "error");
+        return;
+      }
+
+      submitBtn.disabled = true;
       showMsg("Posting your comment…", "");
 
+      const payload = {
+        postId: postId,
+        name: isAdmin ? "Jumitech" : nameRaw,
+        email: email || null,
+        comment: comment,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        isApproved: true,
+        pageUrl: postId,
+
+        // For server notification logic
+        notifyAdmin: true,
+
+        // Admin proof
+        isAdmin: isAdmin === true,
+        adminUid: isAdmin === true && currentUser ? currentUser.uid : null
+      };
+
       commentsRef
-        .add({
-          postId: postId,
-          name: name,
-          email: email || null, // saved, not shown publicly
-          comment: comment,
-          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-          isApproved: true,
-          // Used by server notification logic (Cloud Function)
-          notifyAdmin: true,
-          pageUrl: postId
-        })
+        .add(payload)
         .then(function () {
-          if (commentInput) commentInput.value = "";
+          commentInput.value = "";
           markPosted();
           showMsg("Comment posted successfully!", "success");
-          // Close modal after a short moment for UX
-          setTimeout(function () {
-            if (submitBtn) submitBtn.disabled = false;
-            if (modalEl) modalEl.classList.remove("jumi-modal--open");
-          }, 250);
+          hideVerifyUI();
+          closeModal();
         })
         .catch(function (err) {
           console.error("Error adding comment:", err);
           showMsg("Failed to post comment. Try again.", "error");
         })
         .finally(function () {
-          if (submitBtn) submitBtn.disabled = false;
+          submitBtn.disabled = false;
         });
     });
 
@@ -294,45 +450,8 @@
     return true;
   }
 
-  // Wait until Blogger injects the comments HTML (post pages)
   (function waitForComments() {
     if (initJumiComments()) return;
     setTimeout(waitForComments, 150);
   })();
-  // ===== TEMP ADMIN AUTH (REMOVE AFTER UID IS COPIED) =====
-(function adminAuthTemp() {
-  if (!firebase.auth) return;
-
-  const auth = firebase.auth();
-  const loginBtn = document.getElementById("jumi-admin-login");
-  const logoutBtn = document.getElementById("jumi-admin-logout");
-
-  if (!loginBtn || !logoutBtn) return;
-
-  loginBtn.addEventListener("click", function () {
-    const provider = new firebase.auth.GoogleAuthProvider();
-    auth.signInWithPopup(provider).catch(function (err) {
-      alert("Login failed: " + err.message);
-    });
-  });
-
-  logoutBtn.addEventListener("click", function () {
-    auth.signOut();
-  });
-
-  auth.onAuthStateChanged(function (user) {
-    if (user) {
-      console.log("ADMIN SIGNED IN");
-      console.log("UID:", user.uid);
-      console.log("EMAIL:", user.email);
-
-      loginBtn.style.display = "none";
-      logoutBtn.style.display = "inline-block";
-    } else {
-      loginBtn.style.display = "inline-block";
-      logoutBtn.style.display = "none";
-    }
-  });
-})();
-
 })();
