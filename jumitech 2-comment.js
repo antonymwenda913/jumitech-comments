@@ -1,5 +1,4 @@
 (function () {
-  // Prevent double execution
   if (window.jumiCommentsLoaded) return;
   window.jumiCommentsLoaded = true;
 
@@ -20,12 +19,9 @@
     measurementId: "G-87B358GKT1",
   };
 
-  if (!window.firebase || !firebase.apps) {
-    console.error("Firebase SDK missing");
-    return;
-  }
-
+  if (!window.firebase || !firebase.apps) return;
   if (firebase.apps.length === 0) firebase.initializeApp(firebaseConfig);
+
   const db = firebase.firestore();
   const auth = firebase.auth ? firebase.auth() : null;
 
@@ -34,10 +30,6 @@
      =============================== */
   function safeTrim(v) {
     return (v || "").toString().trim();
-  }
-
-  function isReservedName(name) {
-    return safeTrim(name).toLowerCase() === RESERVED_NAME;
   }
 
   function getPostId() {
@@ -51,8 +43,9 @@
     const n = safeTrim(name);
     if (!n) return "?";
     const p = n.split(/\s+/);
-    if (p.length === 1) return p[0].substring(0, 2).toUpperCase();
-    return (p[0][0] + p[p.length - 1][0]).toUpperCase();
+    return p.length === 1
+      ? p[0].substring(0, 2).toUpperCase()
+      : (p[0][0] + p[p.length - 1][0]).toUpperCase();
   }
 
   function hashString(str) {
@@ -77,26 +70,25 @@
     }
   }
 
-  /* ===============================
-     REPLY UI (STEP 1)
-     =============================== */
   function closeAllReplyForms() {
-    document.querySelectorAll(".jumi-reply-form").forEach((f) => {
+    document.querySelectorAll(".jumi-reply-form").forEach(f => {
       f.style.display = "none";
     });
   }
 
-  function attachReplyUI(commentEl, isReply) {
-    if (!commentEl || isReply) return;
+  /* ===============================
+     REPLY UI + SAVE
+     =============================== */
+  function attachReplyUI(commentEl, data) {
+    if (!commentEl || data.isReply === true) return;
     if (commentEl.querySelector(".jumi-reply-btn")) return;
+
+    const parentId = commentEl.dataset.commentId;
+    if (!parentId) return;
 
     const replyBtn = document.createElement("button");
     replyBtn.className = "jumi-reply-btn";
-    replyBtn.type = "button";
     replyBtn.textContent = "Reply";
-
-    const repliesWrap = document.createElement("div");
-    repliesWrap.className = "jumi-replies";
 
     const form = document.createElement("div");
     form.className = "jumi-reply-form";
@@ -109,17 +101,16 @@
 
     const submitBtn = document.createElement("button");
     submitBtn.className = "jumi-reply-submit";
-    submitBtn.type = "button";
     submitBtn.textContent = "Post reply";
+    submitBtn.type = "button";
 
     const cancelBtn = document.createElement("button");
     cancelBtn.className = "jumi-reply-cancel";
-    cancelBtn.type = "button";
     cancelBtn.textContent = "Cancel";
+    cancelBtn.type = "button";
 
     actions.appendChild(submitBtn);
     actions.appendChild(cancelBtn);
-
     form.appendChild(textarea);
     form.appendChild(actions);
 
@@ -134,118 +125,168 @@
       textarea.value = "";
     };
 
-    submitBtn.onclick = () => {
-      alert("Replies will be saved in STEP 2.");
+    submitBtn.onclick = async () => {
+      const replyText = safeTrim(textarea.value);
+      if (!replyText) return;
+
+      const user = auth?.currentUser || null;
+      const isAdmin = user && user.uid === ADMIN_UID;
+
+      submitBtn.disabled = true;
+
+      try {
+        await db.collection("jumitech_comments").add({
+          postId: getPostId(),
+          parentId: parentId,
+          isReply: true,
+          comment: replyText,
+          name: isAdmin ? "Jumitech" : "Guest",
+          isAdmin: isAdmin === true,
+          adminUid: isAdmin ? user.uid : null,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          isApproved: true,
+        });
+
+        textarea.value = "";
+        form.style.display = "none";
+      } catch (e) {
+        alert("Failed to post reply. Try again.");
+        console.error(e);
+      } finally {
+        submitBtn.disabled = false;
+      }
     };
 
     commentEl.appendChild(replyBtn);
     commentEl.appendChild(form);
-    commentEl.appendChild(repliesWrap);
   }
 
   /* ===============================
-     INIT (TIMING SAFE)
+     RENDER COMMENT
+     =============================== */
+  function renderComment(data, docId) {
+    const item = document.createElement("div");
+    item.className = "jumi-comment-item";
+    item.dataset.commentId = docId;
+
+    const avatar = document.createElement("div");
+    avatar.className = "jumi-comment-avatar";
+    avatar.textContent = getInitials(data.name || "Guest");
+    avatar.style.backgroundImage = avatarGradient(data.name || "Guest");
+
+    const content = document.createElement("div");
+    content.className = "jumi-comment-content";
+
+    const header = document.createElement("div");
+    header.className = "jumi-comment-header";
+
+    const left = document.createElement("div");
+    left.style.display = "flex";
+    left.style.gap = "8px";
+    left.style.alignItems = "center";
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "jumi-comment-name";
+    nameEl.textContent = data.name || "Guest";
+    left.appendChild(nameEl);
+
+    if (data.isAdmin === true) {
+      const badge = document.createElement("span");
+      badge.className = "jumi-admin-badge";
+      badge.textContent = "Admin";
+      left.appendChild(badge);
+    }
+
+    const dateEl = document.createElement("span");
+    dateEl.className = "jumi-comment-date";
+    dateEl.textContent = formatDate(data.createdAt);
+
+    header.appendChild(left);
+    header.appendChild(dateEl);
+
+    const body = document.createElement("div");
+    body.className = "jumi-comment-body";
+    body.textContent = data.comment || "";
+
+    content.appendChild(header);
+    content.appendChild(body);
+
+    item.appendChild(avatar);
+    item.appendChild(content);
+
+    return item;
+  }
+
+  /* ===============================
+     INIT + GROUPING (STEP 3)
      =============================== */
   function init() {
-    const form = document.getElementById("jumi-comment-form");
-    const nameInput = document.getElementById("jumi-name");
-    const emailInput = document.getElementById("jumi-email");
-    const commentInput = document.getElementById("jumi-comment");
-    const submitBtn = document.getElementById("jumi-submit-btn");
     const listEl = document.getElementById("jumi-comments-list");
-    const countEl = document.getElementById("jumi-comments-count");
-    const messageEl = document.getElementById("jumi-form-message");
-
-    if (!form || !listEl) return false;
+    if (!listEl) return false;
 
     const postId = getPostId();
-    const commentsRef = db.collection("jumitech_comments");
 
-    function showMsg(t, e) {
-      if (!messageEl) return;
-      messageEl.textContent = t;
-      messageEl.className = "jumi-form-message";
-      if (e === "error") messageEl.classList.add("jumi-form-message--error");
-      if (e === "success") messageEl.classList.add("jumi-form-message--success");
-    }
-
-    /* ===============================
-       RENDER COMMENT
-       =============================== */
-    function renderComment(data, docId) {
-      const item = document.createElement("div");
-      item.className = "jumi-comment-item";
-      item.dataset.commentId = docId;
-      if (data.isReply === true) item.dataset.isReply = "1";
-
-      const avatar = document.createElement("div");
-      avatar.className = "jumi-comment-avatar";
-      avatar.textContent = getInitials(data.name || "Guest");
-      avatar.style.backgroundImage = avatarGradient(data.name || "Guest");
-
-      const content = document.createElement("div");
-      content.className = "jumi-comment-content";
-
-      const header = document.createElement("div");
-      header.className = "jumi-comment-header";
-
-      const left = document.createElement("div");
-      left.style.display = "flex";
-      left.style.gap = "8px";
-      left.style.alignItems = "center";
-
-      const nameEl = document.createElement("span");
-      nameEl.className = "jumi-comment-name";
-      nameEl.textContent = data.name || "Guest";
-      left.appendChild(nameEl);
-
-      if (data.isAdmin === true) {
-        const badge = document.createElement("span");
-        badge.className = "jumi-admin-badge";
-        badge.textContent = "Admin";
-        left.appendChild(badge);
-      }
-
-      const dateEl = document.createElement("span");
-      dateEl.className = "jumi-comment-date";
-      dateEl.textContent = formatDate(data.createdAt);
-
-      header.appendChild(left);
-      header.appendChild(dateEl);
-
-      const body = document.createElement("div");
-      body.className = "jumi-comment-body";
-      body.textContent = data.comment || "";
-
-      content.appendChild(header);
-      content.appendChild(body);
-
-      item.appendChild(avatar);
-      item.appendChild(content);
-
-      return item;
-    }
-
-    /* ===============================
-       LOAD COMMENTS
-       =============================== */
-    commentsRef
+    db.collection("jumitech_comments")
       .where("postId", "==", postId)
       .where("isApproved", "==", true)
       .orderBy("createdAt", "asc")
       .onSnapshot((snap) => {
         listEl.innerHTML = "";
-        let count = 0;
+
+        const parents = [];
+        const repliesByParent = {};
 
         snap.forEach((doc) => {
           const data = doc.data();
-          const el = renderComment(data, doc.id);
-          attachReplyUI(el, data.isReply === true);
-          listEl.appendChild(el);
-          count++;
+          const id = doc.id;
+
+          if (data.isReply === true && data.parentId) {
+            if (!repliesByParent[data.parentId]) {
+              repliesByParent[data.parentId] = [];
+            }
+            repliesByParent[data.parentId].push({ data, id });
+          } else {
+            parents.push({ data, id });
+          }
         });
 
-        countEl.textContent = `${count} comment${count === 1 ? "" : "s"}`;
+       parents.forEach(({ data, id }) => {
+  const parentEl = renderComment(data, id);
+  attachReplyUI(parentEl, data);
+
+  const replies = repliesByParent[id] || [];
+
+  if (replies.length > 0) {
+    // Toggle button
+    const toggleBtn = document.createElement("button");
+    toggleBtn.className = "jumi-toggle-replies";
+    toggleBtn.type = "button";
+    toggleBtn.textContent = `View ${replies.length} repl${replies.length === 1 ? "y" : "ies"} ▾`;
+
+    // Replies container
+    const repliesWrap = document.createElement("div");
+    repliesWrap.className = "jumi-replies is-collapsed";
+
+    replies.forEach(({ data: rData, id: rId }) => {
+      const replyEl = renderComment(rData, rId);
+      repliesWrap.appendChild(replyEl);
+    });
+
+    let open = false;
+    toggleBtn.onclick = () => {
+      open = !open;
+      repliesWrap.classList.toggle("is-collapsed", !open);
+      toggleBtn.textContent = open
+        ? "Hide replies ▴"
+        : `View ${replies.length} repl${replies.length === 1 ? "y" : "ies"} ▾`;
+    };
+
+    parentEl.appendChild(toggleBtn);
+    parentEl.appendChild(repliesWrap);
+  }
+
+  listEl.appendChild(parentEl);
+});
       });
 
     return true;
